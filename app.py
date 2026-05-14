@@ -111,8 +111,258 @@ class AppConfig:
     APP_TITLE = "CardioTox-AI"
     APP_SUBTITLE = "Predicción, explicación y seguimiento inteligente del riesgo de cardiotoxicidad"
     RANDOM_SEED = 42
+    
+    
+# ==============================================================
+# Guides upload and update
+# ==============================================================
+
+class GuidelineDocumentLoader:
+    """Carga documentos de guías clínicas desde PDF o URL.
+
+    En esta versión:
+    - PDF: se deja preparado para integración real.
+    - URL: mockeado para demo.
+    """
+
+    def load_from_pdf(self, uploaded_file) -> str:
+        if uploaded_file is None:
+            return ""
+
+        # Versión demo: no extrae PDF real todavía.
+        # Para versión real instalar: pip install pypdf
+        # from pypdf import PdfReader
+        # reader = PdfReader(uploaded_file)
+        # text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        # return text
+
+        return """
+        Documento PDF cargado correctamente.
+        Guía clínica de cardio-oncología.
+        Se detectan secciones de estratificación de riesgo, FEVI, GLS, troponina,
+        NT-proBNP, QTc, antraciclinas, anti-HER2, inmunoterapia y seguimiento.
+        """
+
+    def load_from_url(self, url: str) -> str:
+        if not url:
+            return ""
+
+        # Versión demo.
+        # Para versión real:
+        # import requests
+        # response = requests.get(url, timeout=20)
+        # response.raise_for_status()
+        # return response.text
+
+        return f"""
+        Documento recuperado desde URL:
+        {url}
+
+        Contenido simulado de guía clínica actualizada.
+        Incluye criterios de riesgo basal, cardiotoxicidad sintomática y asintomática,
+        seguimiento por tratamiento, biomarcadores, QTc y eventos cardiovasculares.
+        """
 
 
+class GuidelineAnalyzer:
+    """Analiza una guía clínica y extrae cambios relevantes."""
+
+    def analyze(self, document_text: str) -> dict:
+        if not document_text.strip():
+            return {}
+
+        return {
+            "version_detectada": "ESC Cardio-Oncology 2022 / versión demo",
+            "resumen": (
+                "La guía refuerza la estratificación basal del riesgo, el seguimiento "
+                "según tratamiento oncológico y la monitorización de FEVI, GLS, troponina, "
+                "NT-proBNP y QTc. También diferencia cardiotoxicidad sintomática y asintomática."
+            ),
+            "variables_detectadas": [
+                "Edad",
+                "Cardiopatía previa",
+                "FEVI basal",
+                "GLS basal",
+                "Troponina",
+                "NT-proBNP",
+                "QTc",
+                "Antraciclinas",
+                "Anti-HER2",
+                "Inmunoterapia",
+                "Radioterapia torácica",
+            ],
+            "cambios_potenciales": [
+                "Incorporar QTc como variable de toxicidad eléctrica.",
+                "Diferenciar DC-RTC sintomática y asintomática.",
+                "Reforzar seguimiento en pacientes con biomarcadores elevados.",
+                "Ajustar frecuencia de visitas según tratamiento y riesgo.",
+            ],
+        }
+
+
+class ClinicalRuleGenerator:
+    """Genera reglas clínicas estructuradas a partir del análisis de la guía."""
+
+    def generate_rules(self, guideline_analysis: dict) -> pd.DataFrame:
+        if not guideline_analysis:
+            return pd.DataFrame()
+
+        rules = [
+            {
+                "rule_id": "R001",
+                "nombre": "FEVI basal reducida",
+                "condición": "baseline_lvef < 50",
+                "riesgo_asignado": "Alto",
+                "motivo": "FEVI basal reducida aumenta riesgo de cardiotoxicidad.",
+                "estado": "Pendiente validación clínica",
+            },
+            {
+                "rule_id": "R002",
+                "nombre": "Antraciclinas + FEVI límite",
+                "condición": "anthracycline_exposure == True and baseline_lvef < 55",
+                "riesgo_asignado": "Alto",
+                "motivo": "Exposición a antraciclinas con función ventricular límite.",
+                "estado": "Pendiente validación clínica",
+            },
+            {
+                "rule_id": "R003",
+                "nombre": "Anti-HER2 + GLS alterado",
+                "condición": "antiher2_exposure == True and baseline_gls > -18",
+                "riesgo_asignado": "Alto",
+                "motivo": "GLS alterado en paciente con tratamiento anti-HER2.",
+                "estado": "Pendiente validación clínica",
+            },
+            {
+                "rule_id": "R004",
+                "nombre": "Biomarcadores elevados",
+                "condición": "baseline_troponin > 20 or baseline_ntprobnp > 400",
+                "riesgo_asignado": "Moderado/Alto",
+                "motivo": "Elevación de biomarcadores cardíacos.",
+                "estado": "Pendiente validación clínica",
+            },
+            {
+                "rule_id": "R005",
+                "nombre": "QTc prolongado",
+                "condición": "qtc_prolonged == True",
+                "riesgo_asignado": "Alto",
+                "motivo": "Riesgo de toxicidad eléctrica y arritmias.",
+                "estado": "Requiere variable no disponible",
+            },
+        ]
+
+        return pd.DataFrame(rules)
+
+
+class GuidelineImpactSimulator:
+    """Simula impacto de nuevas reglas sobre el histórico."""
+
+    def simulate(self, patients_df: pd.DataFrame, rules_df: pd.DataFrame) -> pd.DataFrame:
+        if rules_df.empty:
+            return pd.DataFrame()
+
+        df = patients_df.copy()
+
+        df["new_guideline_risk"] = df["baseline_risk_group"]
+
+        if "baseline_lvef" in df.columns:
+            df.loc[df["baseline_lvef"] < 50, "new_guideline_risk"] = "Alto"
+
+        if {"anthracycline_exposure", "baseline_lvef"}.issubset(df.columns):
+            df.loc[
+                (df["anthracycline_exposure"] == True) & (df["baseline_lvef"] < 55),
+                "new_guideline_risk",
+            ] = "Alto"
+
+        if {"antiher2_exposure", "baseline_gls"}.issubset(df.columns):
+            df.loc[
+                (df["antiher2_exposure"] == True) & (df["baseline_gls"] > -18),
+                "new_guideline_risk",
+            ] = "Alto"
+
+        if {"baseline_troponin", "baseline_ntprobnp"}.issubset(df.columns):
+            df.loc[
+                (df["baseline_troponin"] > 20) | (df["baseline_ntprobnp"] > 400),
+                "new_guideline_risk",
+            ] = "Alto"
+
+        changed = df[df["new_guideline_risk"] != df["baseline_risk_group"]]
+
+        return changed[
+            [
+                "patient_id",
+                "treatment_family",
+                "baseline_risk_group",
+                "new_guideline_risk",
+                "baseline_lvef",
+                "baseline_gls",
+                "baseline_troponin",
+                "baseline_ntprobnp",
+                "cardiotoxicity_event_next_90d",
+            ]
+        ].copy()
+
+class ScientificEvidenceScanner:
+    """Busca publicaciones que podrían impactar futuras versiones de guías.
+
+    Versión demo mockeada.
+    En versión real podría conectarse a:
+    - PubMed
+    - Europe PMC
+    - Semantic Scholar
+    - CrossRef
+    - ClinicalTrials.gov
+    """
+
+    def search_relevant_publications(self, topic: str = "cardio-oncology cardiotoxicity") -> pd.DataFrame:
+        publications = [
+            {
+                "paper": "Anthracycline-induced cardiotoxicity: mechanisms, monitoring and prevention",
+                "fuente": "European Heart Journal",
+                "año": 2024,
+                "área": "Antraciclinas",
+                "impacto_potencial": "Puede reforzar el uso de biomarcadores y GLS en seguimiento precoz.",
+                "nivel_evidencia": "Alto",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/",
+            },
+            {
+                "paper": "Immune checkpoint inhibitor myocarditis: diagnosis and management",
+                "fuente": "JACC CardioOncology",
+                "año": 2024,
+                "área": "Inmunoterapia",
+                "impacto_potencial": "Puede modificar algoritmos de sospecha precoz de miocarditis.",
+                "nivel_evidencia": "Alto",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/",
+            },
+            {
+                "paper": "HER2-targeted therapy and cardiac surveillance strategies",
+                "fuente": "Journal of Clinical Oncology",
+                "año": 2023,
+                "área": "Anti-HER2",
+                "impacto_potencial": "Puede ajustar la frecuencia óptima de ecocardiogramas seriados.",
+                "nivel_evidencia": "Moderado",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/",
+            },
+            {
+                "paper": "Global longitudinal strain for early detection of cancer therapy-related cardiac dysfunction",
+                "fuente": "Circulation Imaging",
+                "año": 2023,
+                "área": "GLS / FEVI",
+                "impacto_potencial": "Refuerza el valor del GLS como señal precoz antes de caída de FEVI.",
+                "nivel_evidencia": "Alto",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/",
+            },
+            {
+                "paper": "QT prolongation and arrhythmia risk in targeted cancer therapies",
+                "fuente": "Heart Rhythm",
+                "año": 2024,
+                "área": "QTc / arritmias",
+                "impacto_potencial": "Refuerza la necesidad de incluir QTc en el dataset y en el motor de reglas.",
+                "nivel_evidencia": "Moderado",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/",
+            },
+        ]
+
+        return pd.DataFrame(publications)
 # ============================================================
 # Repository layer
 # ============================================================
@@ -605,7 +855,14 @@ class DashboardApp:
         self.literature_service = LiteratureService()
         self.similar_patient_service = SimilarPatientService()
         self.follow_up_planner = FollowUpPlanner()
-
+        
+        self.guideline_loader = GuidelineDocumentLoader()
+        self.guideline_analyzer = GuidelineAnalyzer()
+        self.rule_generator = ClinicalRuleGenerator()
+        self.guideline_simulator = GuidelineImpactSimulator()
+        
+        self.evidence_scanner = ScientificEvidenceScanner()
+        
         self.patients_df = self.repository.load_patients()
         self.visits_df = self.repository.load_visits(self.patients_df)
         self.scored_df = self.prediction_service.score_population(self.patients_df)
@@ -631,6 +888,7 @@ class DashboardApp:
                 "2. Evaluación global de modelos",
                 "3. Discrepancias e infraclasificación",
                 "4. Vista poblacional",
+                "5. Gestor de Guías Clínicas",
             ]
         )
 
@@ -645,6 +903,9 @@ class DashboardApp:
 
         with tabs[3]:
             self._render_population_view()
+            
+        with tabs[4]:
+            self._render_guideline_manager()
 
     def _render_header(self) -> None:
         st.markdown(
@@ -1053,7 +1314,235 @@ class DashboardApp:
         ]
 
         for rec in recommendations:
-            st.write(f"✅ {rec}")        
+            st.write(f"✅ {rec}")
+            
+            
+    def _render_guideline_manager(self) -> None:
+        st.subheader("Gestor de Guías Clínicas")
+
+        st.info(
+            "Este módulo permite cargar una nueva guía clínica, analizarla con IA, "
+            "proponer reglas clínicas estructuradas y simular su impacto sobre el histórico. "
+            "Las reglas propuestas requieren validación clínica antes de activarse."
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### 1. Cargar guía desde PDF")
+            uploaded_pdf = st.file_uploader(
+                "Subir guía clínica en PDF",
+                type=["pdf"],
+                help="Ejemplo: nueva guía ESC/HFA-ICOS en PDF.",
+            )
+
+        with col2:
+            st.markdown("### 2. O recuperar guía desde URL")
+            guideline_url = st.text_input(
+                "URL de la guía clínica",
+                placeholder="https://...",
+            )
+
+        document_text = ""
+
+        if uploaded_pdf is not None:
+            document_text = self.guideline_loader.load_from_pdf(uploaded_pdf)
+            st.success("PDF cargado correctamente.")
+
+        if guideline_url:
+            document_text = self.guideline_loader.load_from_url(guideline_url)
+            st.success("Documento recuperado desde URL.")
+
+        st.markdown("---")
+
+        if not document_text:
+            st.warning("Sube un PDF o introduce una URL para iniciar el análisis.")
+            return
+
+        st.markdown("### 3. Análisis automático de la guía")
+
+        analysis = self.guideline_analyzer.analyze(document_text)
+
+        col_a, col_b = st.columns([1, 1])
+
+        with col_a:
+            st.markdown("#### Versión detectada")
+            st.write(analysis["version_detectada"])
+
+            st.markdown("#### Resumen IA")
+            st.write(analysis["resumen"])
+
+        with col_b:
+            st.markdown("#### Variables clínicas detectadas")
+            variables_df = pd.DataFrame(
+                {"Variable": analysis["variables_detectadas"]}
+            )
+            st.dataframe(variables_df, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Cambios potenciales detectados")
+        for change in analysis["cambios_potenciales"]:
+            st.write(f"✅ {change}")
+            
+        st.markdown("---")
+        
+        st.markdown("### 4. Publicaciones recientes que podrían impactar futuras guías")
+
+        st.info(
+            "Este módulo identifica literatura científica relevante que podría influir en futuras "
+            "actualizaciones de las guías clínicas. En la versión real se conectaría a PubMed, "
+            "Europe PMC, Semantic Scholar o fuentes científicas validadas."
+        )
+
+        search_topic = st.text_input(
+            "Tema de búsqueda científica",
+            value="cardio-oncology cardiotoxicity anthracycline HER2 immunotherapy QTc GLS",
+        )
+
+        papers_df = self.evidence_scanner.search_relevant_publications(search_topic)
+
+        st.dataframe(
+            papers_df[
+                [
+                    "paper",
+                    "fuente",
+                    "año",
+                    "área",
+                    "impacto_potencial",
+                    "nivel_evidencia",
+                    "url",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        col_p1, col_p2 = st.columns(2)
+
+        with col_p1:
+            fig = px.histogram(
+                papers_df,
+                x="área",
+                color="nivel_evidencia",
+                title="Publicaciones por área clínica",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_p2:
+            impact_summary = (
+                papers_df.groupby("nivel_evidencia")
+                .size()
+                .reset_index(name="publicaciones")
+            )
+
+            fig = px.pie(
+                impact_summary,
+                names="nivel_evidencia",
+                values="publicaciones",
+                title="Nivel de evidencia detectado",
+                hole=0.45,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Lectura generativa del impacto potencial")
+
+        st.success(
+            "La literatura reciente sugiere reforzar especialmente tres áreas del sistema: "
+            "monitorización precoz con GLS y biomarcadores, detección de miocarditis asociada a inmunoterapia "
+            "e incorporación de QTc para toxicidad eléctrica. Estas publicaciones podrían justificar futuras "
+            "actualizaciones del motor de reglas clínicas."
+        )
+
+        st.markdown("---")
+
+        st.markdown("### 5. Reglas clínicas propuestas")
+
+        rules_df = self.rule_generator.generate_rules(analysis)
+
+        st.dataframe(
+            rules_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.warning(
+            "Estas reglas son una propuesta generada por IA. "
+            "No deben aplicarse a pacientes sin revisión y validación por expertos clínicos."
+        )
+
+        st.markdown("---")
+
+        st.markdown("### 6. Simulación de impacto sobre histórico")
+
+        changed_patients_df = self.guideline_simulator.simulate(
+            self.patients_df,
+            rules_df,
+        )
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric("Pacientes analizados", f"{len(self.patients_df):,}")
+        c2.metric("Pacientes reclasificados", f"{len(changed_patients_df):,}")
+
+        if len(self.patients_df) > 0:
+            c3.metric(
+                "% reclasificados",
+                f"{len(changed_patients_df) / len(self.patients_df):.1%}",
+            )
+
+        if changed_patients_df.empty:
+            st.success("La nueva propuesta de reglas no reclasifica pacientes en esta simulación.")
+        else:
+            st.dataframe(
+                changed_patients_df.head(50),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            fig = px.histogram(
+                changed_patients_df,
+                x="baseline_risk_group",
+                color="new_guideline_risk",
+                barmode="group",
+                title="Pacientes reclasificados por nuevas reglas",
+                labels={
+                    "baseline_risk_group": "Riesgo previo",
+                    "new_guideline_risk": "Nuevo riesgo",
+                },
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+
+        st.markdown("### 7. Validación clínica")
+
+        col_v1, col_v2, col_v3 = st.columns(3)
+
+        with col_v1:
+            st.button(
+                "Guardar como borrador",
+                use_container_width=True,
+            )
+
+        with col_v2:
+            st.button(
+                "Enviar a validación clínica",
+                use_container_width=True,
+            )
+
+        with col_v3:
+            st.button(
+                "Activar versión validada",
+                use_container_width=True,
+                type="primary",
+                disabled=True,
+                help="Solo debería activarse tras validación clínica.",
+            )
+
+        st.caption(
+            "Buenas prácticas: versionar cada conjunto de reglas, guardar fuente documental, "
+            "fecha, usuario validador, cambios introducidos y métricas de impacto."
+        )      
 
 
 if __name__ == "__main__":
