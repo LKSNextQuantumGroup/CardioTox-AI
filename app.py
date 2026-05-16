@@ -391,7 +391,7 @@ class DataRepository:
         data_dir = base_dir / "data"
 
         self.patients_path = data_dir / "patients_dataton_actualizado.csv"
-        self.visits_path = data_dir / "visits_dataton_actualizado.csv"
+        self.visits_path = data_dir / "visits_dataton_actualizado.zip"
         self.dictionary_path = data_dir / "diccionario_clinico_datasets_dataton_actualizado.csv"
     
    # Load Patients incluying some visit fields (max/join)
