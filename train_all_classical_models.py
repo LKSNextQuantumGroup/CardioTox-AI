@@ -38,7 +38,7 @@ MODEL_DIR = base_dir / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 
 PATIENTS_PATH = DATA_DIR / "patients_dataton_actualizado.csv"
-VISITS_PATH = DATA_DIR / "visits_dataton_actualizado.csv"
+VISITS_PATH = DATA_DIR / "visits_dataton_actualizado.zip"
 
 EVENT_TARGET = "cardiotoxicity_event_next_90d"
 RISK_TARGET = "baseline_risk_group"
