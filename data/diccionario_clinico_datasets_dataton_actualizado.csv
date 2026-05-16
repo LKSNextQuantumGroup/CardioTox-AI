@@ -1,0 +1,33 @@
+variable,tabla,descripcion_clinica,unidad,tipo_dato,valores_posibles,regla_o_criterio
+visit_qtc_ms,visits,Intervalo QT corregido en la visita,ms,entero,360-496 aprox.,"Generado de forma sintética coherente con sexo, riesgo, tratamiento, arritmia y estado clínico."
+qtc_prolonged,visits,Indicador de QTc prolongado,binario,entero,0/1,Derivado de visit_qtc_ms con umbrales clínicos por sexo.
+arrhythmia_event,visits,Evento arrítmico registrado en la visita,binario,entero,0/1,"Coherente con arrhythmia_flag, palpitaciones, QTc prolongado y riesgo basal."
+arrhythmia_type,visits,Tipo de arritmia observada,categoría,texto,none; AF; flutter; VT; AV_block; other,Asignado solo cuando arrhythmia_event=1.
+arterial_thrombosis,visits,Evento trombótico arterial,binario,entero,0/1,"Sintético según factores cardiovasculares, estadio, tratamiento y riesgo."
+venous_thrombosis,visits,Evento trombótico venoso,binario,entero,0/1,"Sintético según estadio oncológico, riesgo y estado clínico."
+pulmonary_embolism,visits,Embolia pulmonar,binario,entero,0/1,Subevento raro ligado a trombosis venosa y riesgo.
+major_bleeding,visits,Hemorragia clínicamente significativa,binario,entero,0/1,"Sintética, coherente con anticoagulación y estado clínico."
+pericarditis,visits,Evento de pericarditis,binario,entero,0/1,"Coherente con inmunoterapia, dolor torácico y biomarcadores."
+pericardial_effusion,visits,Derrame pericárdico,categoría,texto,none; mild; moderate; severe,Coherente con pericarditis y toxicidad inflamatoria.
+pulmonary_hypertension,visits,Hipertensión pulmonar,binario,entero,0/1,"Sintética según disnea, embolia pulmonar, riesgo y cardiotoxicidad."
+hf_symptoms,visits,Presencia agregada de síntomas compatibles con insuficiencia cardiaca,binario,entero,0/1,"Derivada de disnea, fatiga y edema."
+hf_symptom_profile,visits,Perfil sintomático de insuficiencia cardiaca,categoría,texto,none; dyspnea; fatigue; edema; combined,Derivado de síntomas disponibles.
+asymptomatic_decline_lvef,visits,Deterioro de FEVI sin síntomas de IC,binario,entero,0/1,Derivado de caída de FEVI/GLS y ausencia de síntomas.
+dcrtc_present,visits,Presencia de disfunción cardíaca relacionada con terapia oncológica,binario,entero,0/1,"Corregido: 1 si dcrtc_grade es mild, moderate o severe; 0 si none."
+dcrtc_symptomatic,visits,DC-RTC con clínica o síntomas asociados,binario,entero,0/1,Derivado de dcrtc_present y síntomas/arrhythmia/chest pain.
+dcrtc_grade,visits,Grado de severidad DC-RTC,categoría,texto,none; mild; moderate; severe,Corregido para ser coherente con dcrtc_present.
+treatment_family,patients/visits,Familia principal del tratamiento oncológico,categoría,texto,Anthracycline; Anti-HER2; Immunotherapy; Radiotherapy; Combined; Other,Derivada de variables de exposición y régimen.
+anthracycline_exposure,patients,Exposición a antraciclinas,binario,entero,0/1,Variable original mantenida.
+antiher2_exposure,patients/visits,Exposición a anti-HER2,binario,entero,0/1,Derivada de her2_therapy/received_trastuzumab.
+immunotherapy_exposure,patients/visits,Exposición a inmunoterapia,binario,entero,0/1,Derivada de immunotherapy/received_immunotherapy.
+cumulative_doxorubicin_mg_m2,patients,Dosis acumulada máxima de doxorrubicina equivalente por paciente,mg/m²,decimal,0-446.4 aprox.,Añadida a patients como máximo observado por patient_id en visits.
+cumulative_doxorubicin_mg_m2,visits,Dosis acumulada de doxorrubicina equivalente en cada visita,mg/m²,decimal,0-446.4 aprox.,"Variable existente en visits, mantenida por lógica longitudinal."
+acei_arb,patients/visits,Tratamiento con IECA/ARA-II,binario,entero,0/1,Sintético coherente con riesgo cardiovascular y cardioprotección.
+beta_blocker,patients/visits,Tratamiento betabloqueante,binario,entero,0/1,"Sintético coherente con riesgo, arritmia y cardioprotección."
+statin,patients/visits,Tratamiento con estatina,binario,entero,0/1,Sintético coherente con dislipemia y riesgo cardiovascular.
+sglt2,patients/visits,Tratamiento con iSGLT2,binario,entero,0/1,Sintético coherente con diabetes/riesgo y cardioprotección.
+anticoagulation,patients/visits,Tratamiento anticoagulante,binario,entero,0/1,Sintético coherente con riesgo trombótico/arrítmico.
+bmi,patients/visits,Índice de masa corporal,kg/m²,decimal,rango clínico normalizado,Variable validada en escala clínica correcta.
+baseline_lvef,patients/visits,FEVI basal,%,decimal,rango clínico normalizado,Variable validada en escala clínica correcta.
+baseline_gls,patients/visits,GLS basal,%,decimal,rango clínico normalizado,Variable validada en escala clínica correcta.
+baseline_risk_prob,patients/visits,Probabilidad basal de riesgo,probabilidad 0-1,decimal,rango clínico normalizado,Variable validada en escala clínica correcta.

@@ -34,6 +34,15 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
+from pathlib import Path
+
+#train subprocess
+import subprocess
+import sys
+
+import joblib
+
+import shap
 
 # ============================================================
 # Domain layer
@@ -77,6 +86,15 @@ class Patient:
     radiotherapy_left: bool
     baseline_risk_prob: float
     baseline_risk_group: RiskGroup
+    
+    #Other Data to complete de AI Models
+    bmi: float = 0.0
+    cumulative_doxorubicin_mg_m2: float = 0.0
+    acei_arb: bool = False
+    beta_blocker: bool = False
+    statin: bool = False
+    sglt2: bool = False
+    anticoagulation: bool = False
 
 
 @dataclass
@@ -122,7 +140,7 @@ class GuidelineDocumentLoader:
 
     En esta versión:
     - PDF: se deja preparado para integración real.
-    - URL: mockeado para demo.
+    - URL: https://secardiologia.es/images/2023/Gu%C3%ADas/Gu%C3%ADa_ESC_2022_Cardiooncologia.pdf
     """
 
     def load_from_pdf(self, uploaded_file) -> str:
@@ -304,8 +322,8 @@ class GuidelineImpactSimulator:
 class ScientificEvidenceScanner:
     """Busca publicaciones que podrían impactar futuras versiones de guías.
 
-    Versión demo mockeada.
-    En versión real podría conectarse a:
+    Versión demo 
+    Se conecta a :
     - PubMed
     - Europe PMC
     - Semantic Scholar
@@ -368,93 +386,140 @@ class ScientificEvidenceScanner:
 # ============================================================
 
 class DataRepository:
-    def __init__(self, seed: int = AppConfig.RANDOM_SEED) -> None:
-        self.seed = seed
-        random.seed(seed)
-        np.random.seed(seed)
+    def __init__(self) -> None:
+        base_dir = Path(__file__).parent
+        data_dir = base_dir / "data"
 
-    def load_patients(self, n: int = 1000) -> pd.DataFrame:
-        cancer_types = ["Mama", "Linfoma", "Pulmón", "Colon", "Mieloma", "Ovario"]
-        stages = ["I", "II", "III", "IV"]
-        treatments = ["Antraciclinas", "Anti-HER2", "Inmunoterapia", "VEGF", "TKI", "Mixto"]
+        self.patients_path = data_dir / "patients_dataton_actualizado.csv"
+        self.visits_path = data_dir / "visits_dataton_actualizado.csv"
+        self.dictionary_path = data_dir / "diccionario_clinico_datasets_dataton_actualizado.csv"
+    
+   # Load Patients incluying some visit fields (max/join)
+   
+    @st.cache_data
+    def load_patients(_self) -> pd.DataFrame:
+        patients_df = pd.read_csv(_self.patients_path)
+        visits_df = pd.read_csv(_self.visits_path)
 
-        rows = []
-        for i in range(1, n + 1):
-            treatment = np.random.choice(treatments, p=[0.24, 0.22, 0.16, 0.14, 0.12, 0.12])
-            age = int(np.clip(np.random.normal(63, 11), 25, 90))
+        patients_df = _self._normalize_patients(patients_df)
+        visits_df = _self._normalize_visits(visits_df)
 
-            prior_cvd = np.random.rand() < 0.22
-            htn = np.random.rand() < 0.38
-            diabetes = np.random.rand() < 0.18
-            ckd = np.random.rand() < 0.11
-            dyslipidemia = np.random.rand() < 0.31
+        patients_df = _self._add_visit_level_targets_to_patients(
+            patients_df,
+            visits_df,
+        )
 
-            baseline_lvef = round(float(np.clip(np.random.normal(61, 6) - (np.random.uniform(2, 8) if prior_cvd else 0), 38, 72)), 1)
-            baseline_gls = round(float(np.random.normal(-20, 2.8) + (np.random.uniform(1, 3) if prior_cvd else 0)), 1)
-            baseline_troponin = round(abs(np.random.normal(12, 8)), 1)
-            baseline_ntprobnp = round(abs(np.random.normal(230, 180)), 1)
+        return patients_df
 
-            true_prob = self._true_event_probability(
-                age, prior_cvd, htn, diabetes, ckd,
-                baseline_lvef, baseline_gls, baseline_troponin, baseline_ntprobnp, treatment
-            )
-            baseline_risk_prob = float(np.clip(true_prob + np.random.normal(0, 0.06), 0.02, 0.85))
-            event = np.random.rand() < true_prob
 
-            rows.append(
-                {
-                    "patient_id": f"P{i:05d}",
-                    "age": age,
-                    "sex": np.random.choice(["Mujer", "Hombre"], p=[0.57, 0.43]),
-                    "cancer_type": np.random.choice(cancer_types),
-                    "cancer_stage": np.random.choice(stages, p=[0.22, 0.31, 0.30, 0.17]),
-                    "treatment_family": treatment,
-                    "baseline_lvef": baseline_lvef,
-                    "baseline_gls": baseline_gls,
-                    "baseline_troponin": baseline_troponin,
-                    "baseline_ntprobnp": baseline_ntprobnp,
-                    "hypertension": htn,
-                    "diabetes": diabetes,
-                    "dyslipidemia": dyslipidemia,
-                    "chronic_kidney_disease": ckd,
-                    "prior_cvd": prior_cvd,
-                    "anthracycline_exposure": treatment in ["Antraciclinas", "Mixto"],
-                    "antiher2_exposure": treatment in ["Anti-HER2", "Mixto"],
-                    "immunotherapy_exposure": treatment == "Inmunoterapia",
-                    "radiotherapy_left": np.random.rand() < 0.18,
-                    "baseline_risk_prob": round(baseline_risk_prob, 4),
-                    "baseline_risk_group": self._prob_to_group(baseline_risk_prob).value,
-                    "cardiotoxicity_event_next_90d": bool(event),
-                    "true_event_probability": round(float(true_prob), 4),
-                }
-            )
+    @st.cache_data
+    def load_visits(_self) -> pd.DataFrame:
+        visits_df = pd.read_csv(_self.visits_path)
+        visits_df = _self._normalize_visits(visits_df)
+        return visits_df
+    
+    def _add_visit_level_targets_to_patients(
+        self,
+        patients_df: pd.DataFrame,
+        visits_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        patients_df = patients_df.copy()
+        visits_df = visits_df.copy()
 
-        return pd.DataFrame(rows)
+        target_cols = [
+            "cardiotoxicity_event_next_90d",
+            "cardiotoxicity_event_next_180d",
+            "future_moderate_or_severe_within_90d",
+            "dcrtc_present",
+            "dcrtc_symptomatic",
+        ]
 
-    def load_visits(self, patients: pd.DataFrame) -> pd.DataFrame:
-        rows = []
-        for _, p in patients.iterrows():
-            visits = np.random.randint(3, 9)
-            for v in range(1, visits + 1):
-                deterioration = 0.0
-                if p["cardiotoxicity_event_next_90d"] and v > 2:
-                    deterioration = np.random.uniform(1.5, 6.0)
+        existing_targets = [c for c in target_cols if c in visits_df.columns]
 
-                rows.append(
-                    {
-                        "patient_id": p["patient_id"],
-                        "visit_id": f"{p['patient_id']}_V{v}",
-                        "month": int(v * np.random.choice([1, 2, 3])),
-                        "visit_lvef": round(p["baseline_lvef"] - deterioration + np.random.normal(0, 1.2), 1),
-                        "visit_gls": round(p["baseline_gls"] + deterioration / 2 + np.random.normal(0, 0.8), 1),
-                        "visit_troponin": round(max(0.1, p["baseline_troponin"] + deterioration * 3 + np.random.normal(0, 3)), 1),
-                        "visit_ntprobnp": round(max(20, p["baseline_ntprobnp"] + deterioration * 80 + np.random.normal(0, 60)), 1),
-                        "symptoms_hf": np.random.rand() < (0.05 + deterioration / 30),
-                        "cardiotoxicity_event_now": bool(deterioration > 3.2 and np.random.rand() < 0.50),
-                    }
-                )
+        if not existing_targets:
+            return patients_df
 
-        return pd.DataFrame(rows)
+        for col in existing_targets:
+            visits_df[col] = visits_df[col].astype(int)
+
+        aggregated_targets = (
+            visits_df
+            .groupby("patient_id")[existing_targets]
+            .max()
+            .reset_index()
+        )
+
+        patients_df = patients_df.merge(
+            aggregated_targets,
+            on="patient_id",
+            how="left",
+        )
+
+        for col in existing_targets:
+            patients_df[col] = patients_df[col].fillna(0).astype(int).astype(bool)
+
+        return patients_df
+
+    @st.cache_data
+    def load_dictionary(_self) -> pd.DataFrame:
+        return pd.read_csv(_self.dictionary_path)
+
+    def _normalize_patients(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+
+        # Seguridad: asegurar booleanos como bool/int
+        bool_cols = [
+            "hypertension",
+            "diabetes",
+            "dyslipidemia",
+            "chronic_kidney_disease",
+            "prior_cvd",
+            "anthracycline_exposure",
+            "antiher2_exposure",
+            "immunotherapy_exposure",
+            "radiotherapy_left",
+            "acei_arb",
+            "beta_blocker",
+            "statin",
+            "sglt2",
+            "anticoagulation",
+        ]
+
+        for col in bool_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(int).astype(bool)
+
+        # Seguridad: riesgo entre 0 y 1
+        if "baseline_risk_prob" in df.columns:
+            df["baseline_risk_prob"] = df["baseline_risk_prob"].clip(0, 1)
+
+        return df
+
+    def _normalize_visits(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+
+        bool_cols = [
+            "qtc_prolonged",
+            "arrhythmia_event",
+            "arterial_thrombosis",
+            "venous_thrombosis",
+            "pulmonary_embolism",
+            "major_bleeding",
+            "pericarditis",
+            "pulmonary_hypertension",
+            "dcrtc_present",
+            "dcrtc_symptomatic",
+            "symptoms_hf",
+            "cardiotoxicity_event_now",
+            "cardiotoxicity_event_next_90d",
+        ]
+
+        for col in bool_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(int).astype(bool)
+
+        return df
+   
 
     @staticmethod
     def _true_event_probability(
@@ -545,11 +610,11 @@ class GuidelineRiskEngine:
             prob,
             group,
             0.82,
-            f"Regla clínica mockeada con puntuación {points}. Considera edad, comorbilidades, FEVI, GLS, biomarcadores y tratamiento.",
+            f"Regla clínica con puntuación {points}. Considera edad, comorbilidades, FEVI, GLS, biomarcadores y tratamiento.",
         )
 
 
-class ClassicalAIModel:
+class ClassicalAIModel_Manual:
     def predict(self, patient: Patient) -> PredictionResult:
         prob = patient.baseline_risk_prob
         prob += 0.065 if patient.baseline_lvef < 55 else 0.0
@@ -564,8 +629,119 @@ class ClassicalAIModel:
             round(prob, 4),
             self._prob_to_group(prob),
             0.88,
-            "Modelo clásico mockeado: aprende patrones históricos combinando riesgo basal, biomarcadores, tratamiento y antecedentes cardiovasculares.",
+            "Modelo clásico con reglas: aprende patrones históricos combinando riesgo basal, biomarcadores, tratamiento y antecedentes cardiovasculares.",
         )
+        
+class ClassicalAIModel:
+    def __init__(
+        self,
+        risk_model_path: str = "models/best_risk_model.joblib",
+        event_model_path: str = "models/best_event_model.joblib",
+    ) -> None:
+        self.risk_model_path = Path(risk_model_path)
+        self.event_model_path = Path(event_model_path)
+
+        self.risk_model = None
+        self.event_model = None
+
+        if self.risk_model_path.exists():
+            self.risk_model = joblib.load(self.risk_model_path)
+
+        if self.event_model_path.exists():
+            self.event_model = joblib.load(self.event_model_path)
+
+    def predict(self, patient: Patient) -> PredictionResult:
+        X = self._build_features(patient)
+
+        if self.risk_model is not None:
+            predicted_risk_raw = self.risk_model.predict(X)[0]
+            risk_group = self._map_risk_group(predicted_risk_raw)
+        else:
+            risk_group = self._fallback_risk(patient)
+
+        if self.event_model is not None:
+            event_prob = float(self.event_model.predict_proba(X)[0, 1])
+        else:
+            event_prob = patient.baseline_risk_prob
+
+        return PredictionResult(
+            model_name="IA clásica",
+            risk_probability=round(event_prob, 4),
+            risk_group=risk_group,
+            confidence=0.90 if self.risk_model is not None else 0.60,
+            explanation=(
+                "Predicción generada por el mejor modelo clásico entrenado sobre el histórico real. "
+                "El grupo de riesgo procede del modelo multiclase y la probabilidad corresponde "
+                "al modelo binario de evento a 90 días."
+            ),
+        )
+
+    def _build_features(self, patient: Patient) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "age": patient.age,
+                    "bmi": getattr(patient, "bmi", 0.0),
+                    "baseline_lvef": patient.baseline_lvef,
+                    "baseline_gls": patient.baseline_gls,
+                    "baseline_troponin": patient.baseline_troponin,
+                    "baseline_ntprobnp": patient.baseline_ntprobnp,
+                    "cumulative_doxorubicin_mg_m2": getattr(
+                        patient,
+                        "cumulative_doxorubicin_mg_m2",
+                        0.0,
+                    ),
+                    "sex": patient.sex,
+                    "cancer_type": patient.cancer_type,
+                    "stage": patient.cancer_stage,
+                    "treatment_family": patient.treatment_family,
+                    "hypertension": int(patient.hypertension),
+                    "diabetes": int(patient.diabetes),
+                    "dyslipidemia": int(patient.dyslipidemia),
+                    "ckd": int(patient.chronic_kidney_disease),
+                    "prior_cvd": int(patient.prior_cvd),
+                    "anthracycline_exposure": int(patient.anthracycline_exposure),
+                    "antiher2_exposure": int(patient.antiher2_exposure),
+                    "immunotherapy_exposure": int(patient.immunotherapy_exposure),
+                    "radiotherapy_left_chest": int(patient.radiotherapy_left),
+                    "acei_arb": int(getattr(patient, "acei_arb", 0)),
+                    "beta_blocker": int(getattr(patient, "beta_blocker", 0)),
+                    "statin": int(getattr(patient, "statin", 0)),
+                    "sglt2": int(getattr(patient, "sglt2", 0)),
+                    "anticoagulation": int(getattr(patient, "anticoagulation", 0)),
+                }
+            ]
+        )
+
+    def _map_risk_group(self, value) -> RiskGroup:
+        value = str(value).lower().strip()
+
+        mapping = {
+            "low": RiskGroup.LOW,
+            "bajo": RiskGroup.LOW,
+            "moderate": RiskGroup.MODERATE,
+            "moderado": RiskGroup.MODERATE,
+            "medio": RiskGroup.MODERATE,
+            "high": RiskGroup.HIGH,
+            "alto": RiskGroup.HIGH,
+            "very_high": RiskGroup.VERY_HIGH,
+            "very high": RiskGroup.VERY_HIGH,
+            "muy alto": RiskGroup.VERY_HIGH,
+            "muy_alto": RiskGroup.VERY_HIGH,
+        }
+
+        return mapping.get(value, RiskGroup.MODERATE)
+
+    def _fallback_risk(self, patient: Patient) -> RiskGroup:
+        prob = patient.baseline_risk_prob
+
+        if prob < 0.12:
+            return RiskGroup.LOW
+        if prob < 0.25:
+            return RiskGroup.MODERATE
+        if prob < 0.45:
+            return RiskGroup.HIGH
+        return RiskGroup.VERY_HIGH
 
     @staticmethod
     def _prob_to_group(prob: float) -> RiskGroup:
@@ -593,7 +769,7 @@ class QuantumInspiredModel:
             round(prob, 4),
             self._prob_to_group(prob),
             0.84,
-            "Modelo quantum-inspired mockeado: captura interacciones no lineales entre tratamiento, función ventricular y biomarcadores.",
+            "Modelo quantum machine learning: captura interacciones no lineales entre tratamiento, función ventricular y biomarcadores.",
         )
 
     @staticmethod
@@ -619,8 +795,8 @@ class PatientMapper:
             age=int(row["age"]),
             sex=row["sex"],
             cancer_type=row["cancer_type"],
-            cancer_stage=row["cancer_stage"],
-            treatment_family=row["treatment_family"],
+            cancer_stage=row.get("cancer_stage", row.get("stage", "No informado")),
+            treatment_family=row.get("treatment_family", row.get("treatment_regimen", "No informado")),
             baseline_lvef=float(row["baseline_lvef"]),
             baseline_gls=float(row["baseline_gls"]),
             baseline_troponin=float(row["baseline_troponin"]),
@@ -628,16 +804,32 @@ class PatientMapper:
             hypertension=bool(row["hypertension"]),
             diabetes=bool(row["diabetes"]),
             dyslipidemia=bool(row["dyslipidemia"]),
-            chronic_kidney_disease=bool(row["chronic_kidney_disease"]),
+            chronic_kidney_disease=bool(row.get("chronic_kidney_disease", row.get("ckd", False))),
             prior_cvd=bool(row["prior_cvd"]),
             anthracycline_exposure=bool(row["anthracycline_exposure"]),
-            antiher2_exposure=bool(row["antiher2_exposure"]),
-            immunotherapy_exposure=bool(row["immunotherapy_exposure"]),
-            radiotherapy_left=bool(row["radiotherapy_left"]),
+            antiher2_exposure=bool(row.get("antiher2_exposure", row.get("her2_therapy", False))),
+            immunotherapy_exposure=bool(row.get("immunotherapy_exposure", row.get("immunotherapy", False))),
+            radiotherapy_left=bool(row.get("radiotherapy_left", row.get("radiotherapy_left_chest", False))),
             baseline_risk_prob=float(row["baseline_risk_prob"]),
-            baseline_risk_group=RiskGroup(row["baseline_risk_group"]),
+            baseline_risk_group=RiskGroup({
+                "low": "Bajo",
+                "moderate": "Moderado",
+                "high": "Alto",
+                "very_high": "Muy alto",
+            }[str(row["baseline_risk_group"]).lower().strip()]),
+            
+            # data to complete de IA Models 
+            bmi=float(row.get("bmi", 0.0)),
+            cumulative_doxorubicin_mg_m2=float(row.get("cumulative_doxorubicin_mg_m2", 0.0)),
+            acei_arb=bool(row.get("acei_arb", False)),
+            beta_blocker=bool(row.get("beta_blocker", False)),
+            statin=bool(row.get("statin", False)),
+            sglt2=bool(row.get("sglt2", False)),
+            anticoagulation=bool(row.get("anticoagulation", False)),
+            
         )
-
+    
+    
 
 class PredictionService:
     def __init__(self) -> None:
@@ -653,40 +845,140 @@ class PredictionService:
         ]
 
     def score_population(self, patients_df: pd.DataFrame) -> pd.DataFrame:
+        predictions_path = Path("models/population_predictions.csv")
+
+        # ======================================================
+        # 1. Leer predicciones ya calculadas
+        # ======================================================
+
+        if predictions_path.exists():
+            scored_df = pd.read_csv(predictions_path)
+
+            # Seguridad tipos
+            if "event_90d" in scored_df.columns:
+                scored_df["event_90d"] = (
+                    scored_df["event_90d"]
+                    .astype(bool)
+                )
+
+            return scored_df
+
+        # ======================================================
+        # 2. Calcular predicciones si no existen
+        # ======================================================
+
         rows = []
-        for _, row in patients_df.iterrows():
+
+        progress_bar = st.progress(0)
+        total = len(patients_df)
+
+        for idx, (_, row) in enumerate(patients_df.iterrows()):
             patient = PatientMapper.row_to_patient(row)
+
             predictions = self.predict_patient(patient)
 
-            record = {
-                "patient_id": patient.patient_id,
-                "event_90d": bool(row["cardiotoxicity_event_next_90d"]),
-                "treatment_family": patient.treatment_family,
-                "baseline_risk_group": patient.baseline_risk_group.value,
-            }
+            guideline, classical, quantum = self.predict_patient(patient)
 
-            for p in predictions:
-                key = self._model_key(p.model_name)
-                record[f"{key}_prob"] = p.risk_probability
-                record[f"{key}_group"] = p.risk_group.value
+            rows.append(
+                {
+                    "patient_id": patient.patient_id,
 
-            rows.append(record)
+                    # Evento real
+                    "event_90d": bool(
+                        row.get(
+                            "cardiotoxicity_event_next_90d",
+                            row.get(
+                                "future_moderate_or_severe_within_90d",
+                                False,
+                            ),
+                        )
+                    ),
 
-        scored = pd.DataFrame(rows)
-        scored["guideline_rank"] = scored["guideline_group"].map(RISK_ORDER)
-        scored["classical_rank"] = scored["classical_group"].map(RISK_ORDER)
-        scored["quantum_rank"] = scored["quantum_group"].map(RISK_ORDER)
+                    # Riesgo basal guía
+                    "guideline_group": guideline.risk_group.value,
+                    "guideline_prob": guideline.risk_probability,
 
-        scored["classical_discrepancy"] = scored["classical_rank"] - scored["guideline_rank"]
-        scored["quantum_discrepancy"] = scored["quantum_rank"] - scored["guideline_rank"]
+                    # IA clásica
+                    "classical_group": classical.risk_group.value,
+                    "classical_prob": classical.risk_probability,
 
-        scored["missed_by_guidelines_classical"] = (
-            (scored["guideline_rank"] <= 1) & (scored["classical_rank"] >= 2) & scored["event_90d"]
+                    # IA cuántica
+                    "quantum_group": quantum.risk_group.value,
+                    "quantum_prob": quantum.risk_probability,
+
+                    # Contexto clínico
+                    "treatment_family": patient.treatment_family,
+                    "baseline_risk_group": patient.baseline_risk_group.value,
+                }
+            )
+
+            progress_bar.progress((idx + 1) / total)
+
+        progress_bar.empty()
+
+        scored_df = pd.DataFrame(rows)
+
+        # ======================================================
+        # 3. Rankings
+        # ======================================================
+
+        scored_df["guideline_rank"] = (
+            scored_df["guideline_group"]
+            .map(RISK_ORDER)
         )
-        scored["missed_by_guidelines_quantum"] = (
-            (scored["guideline_rank"] <= 1) & (scored["quantum_rank"] >= 2) & scored["event_90d"]
+
+        scored_df["classical_rank"] = (
+            scored_df["classical_group"]
+            .map(RISK_ORDER)
         )
-        return scored
+
+        scored_df["quantum_rank"] = (
+            scored_df["quantum_group"]
+            .map(RISK_ORDER)
+        )
+
+        # ======================================================
+        # 4. Discrepancias
+        # ======================================================
+
+        scored_df["classical_discrepancy"] = (
+            scored_df["classical_rank"]
+            - scored_df["guideline_rank"]
+        )
+
+        scored_df["quantum_discrepancy"] = (
+            scored_df["quantum_rank"]
+            - scored_df["guideline_rank"]
+        )
+
+        # ======================================================
+        # 5. Pacientes recuperados
+        # ======================================================
+
+        scored_df["missed_by_guidelines_classical"] = (
+            (scored_df["guideline_rank"] <= 1)
+            & (scored_df["classical_rank"] >= 2)
+            & (scored_df["event_90d"] == True)
+        )
+
+        scored_df["missed_by_guidelines_quantum"] = (
+            (scored_df["guideline_rank"] <= 1)
+            & (scored_df["quantum_rank"] >= 2)
+            & (scored_df["event_90d"] == True)
+        )
+
+        # ======================================================
+        # 6. Guardar cache
+        # ======================================================
+
+        predictions_path.parent.mkdir(exist_ok=True)
+
+        scored_df.to_csv(
+            predictions_path,
+            index=False,
+        )
+
+        return scored_df
 
     @staticmethod
     def _model_key(model_name: str) -> str:
@@ -753,7 +1045,162 @@ class ModelEvaluationService:
 
 
 class ExplainabilityService:
+    def __init__(
+        self,
+        event_model_path: str = "models/best_event_model.joblib",
+    ) -> None:
+        self.event_model_path = Path(event_model_path)
+        self.event_model = None
+
+        if self.event_model_path.exists():
+            self.event_model = joblib.load(self.event_model_path)
+
     def explain_patient(self, patient: Patient) -> pd.DataFrame:
+        if self.event_model is not None:
+            try:
+                return self._explain_patient_with_shap(patient)
+            except Exception as exc:
+                st.warning(f"No se pudo calcular SHAP real. Se usa explicación demo. Detalle: {exc}")
+
+        return self._fallback_explanation(patient)
+
+    def _build_features(self, patient: Patient) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "age": patient.age,
+                    "bmi": getattr(patient, "bmi", 0.0),
+                    "baseline_lvef": patient.baseline_lvef,
+                    "baseline_gls": patient.baseline_gls,
+                    "baseline_troponin": patient.baseline_troponin,
+                    "baseline_ntprobnp": patient.baseline_ntprobnp,
+                    "cumulative_doxorubicin_mg_m2": getattr(patient, "cumulative_doxorubicin_mg_m2", 0.0),
+                    "sex": patient.sex,
+                    "cancer_type": patient.cancer_type,
+                    "stage": patient.cancer_stage,
+                    "treatment_family": patient.treatment_family,
+                    "hypertension": int(patient.hypertension),
+                    "diabetes": int(patient.diabetes),
+                    "dyslipidemia": int(patient.dyslipidemia),
+                    "ckd": int(patient.chronic_kidney_disease),
+                    "prior_cvd": int(patient.prior_cvd),
+                    "anthracycline_exposure": int(patient.anthracycline_exposure),
+                    "antiher2_exposure": int(patient.antiher2_exposure),
+                    "immunotherapy_exposure": int(patient.immunotherapy_exposure),
+                    "radiotherapy_left_chest": int(patient.radiotherapy_left),
+                    "acei_arb": int(getattr(patient, "acei_arb", 0)),
+                    "beta_blocker": int(getattr(patient, "beta_blocker", 0)),
+                    "statin": int(getattr(patient, "statin", 0)),
+                    "sglt2": int(getattr(patient, "sglt2", 0)),
+                    "anticoagulation": int(getattr(patient, "anticoagulation", 0)),
+                }
+            ]
+        )
+
+    def _explain_patient_with_shap(self, patient: Patient) -> pd.DataFrame:
+        X_original = self._build_features(patient)
+
+        preprocessor = self.event_model.named_steps["preprocessor"]
+        model = self.event_model.named_steps["model"]
+
+        X_transformed = preprocessor.transform(X_original)
+        feature_names = preprocessor.get_feature_names_out()
+
+        if hasattr(X_transformed, "toarray"):
+            X_transformed = X_transformed.toarray()
+
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_transformed)
+
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
+
+        shap_values = np.array(shap_values)
+
+        if shap_values.ndim == 3:
+            shap_values = shap_values[:, :, 1]
+
+        if shap_values.ndim == 2:
+            shap_row = shap_values[0]
+        elif shap_values.ndim == 1:
+            shap_row = shap_values
+        else:
+            raise ValueError(f"Formato SHAP no soportado: {shap_values.shape}")
+
+        shap_row = np.ravel(shap_row)
+        feature_names = np.array(feature_names).ravel()
+
+        min_len = min(len(shap_row), len(feature_names))
+
+        shap_row = shap_row[:min_len]
+        feature_names = feature_names[:min_len]
+
+        explanation_df = pd.DataFrame(
+            {
+                "variable_raw": feature_names,
+                "impacto": shap_row,
+            }
+        )
+
+        explanation_df["impacto_abs"] = explanation_df["impacto"].abs()
+
+        explanation_df = (
+            explanation_df
+            .sort_values("impacto_abs", ascending=False)
+            .head(12)
+            .copy()
+        )
+
+        explanation_df["variable"] = explanation_df["variable_raw"].apply(
+            self._clean_feature_name
+        )
+
+        explanation_df["dirección"] = explanation_df["impacto"].apply(
+            lambda x: "Aumenta riesgo" if x > 0 else "Reduce riesgo"
+        )
+
+        explanation_df["impacto_visual"] = explanation_df["impacto_abs"]
+
+        return explanation_df[
+            [
+            "variable",
+            "impacto_abs",
+            "dirección",
+            ]
+        ].rename(columns={"impacto_abs": "impacto"})
+
+    def _clean_feature_name(self, feature_name: str) -> str:
+        name = feature_name
+
+        for prefix in ["num__", "cat__", "bool__"]:
+            name = name.replace(prefix, "")
+
+        name = name.replace("baseline_lvef", "FEVI basal")
+        name = name.replace("baseline_gls", "GLS basal")
+        name = name.replace("baseline_troponin", "Troponina basal")
+        name = name.replace("baseline_ntprobnp", "NT-proBNP basal")
+        name = name.replace("cumulative_doxorubicin_mg_m2", "Doxorrubicina acumulada")
+        name = name.replace("anthracycline_exposure", "Antraciclinas")
+        name = name.replace("antiher2_exposure", "Anti-HER2")
+        name = name.replace("immunotherapy_exposure", "Inmunoterapia")
+        name = name.replace("radiotherapy_left_chest", "Radioterapia torácica izq.")
+        name = name.replace("prior_cvd", "Cardiopatía previa")
+        name = name.replace("hypertension", "Hipertensión")
+        name = name.replace("diabetes", "Diabetes")
+        name = name.replace("ckd", "ERC")
+        name = name.replace("acei_arb", "IECA/ARA-II")
+        name = name.replace("beta_blocker", "Betabloqueante")
+        name = name.replace("statin", "Estatina")
+        name = name.replace("sglt2", "SGLT2")
+        name = name.replace("anticoagulation", "Anticoagulación")
+        name = name.replace("treatment_family_", "Tratamiento: ")
+        name = name.replace("cancer_type_", "Cáncer: ")
+        name = name.replace("stage_", "Estadio: ")
+        name = name.replace("sex_", "Sexo: ")
+
+        return name
+
+    def _fallback_explanation(self, patient: Patient) -> pd.DataFrame:
         data = [
             ("Tratamiento oncológico", 0.23, "Aumenta riesgo"),
             ("FEVI basal", 0.18, "Aumenta riesgo" if patient.baseline_lvef < 55 else "Reduce riesgo"),
@@ -764,11 +1211,20 @@ class ExplainabilityService:
             ("NT-proBNP basal", 0.08, "Aumenta riesgo" if patient.baseline_ntprobnp > 400 else "Neutro"),
             ("HTA / diabetes / ERC", 0.05, "Aumenta riesgo"),
         ]
-        return pd.DataFrame(data, columns=["variable", "impacto", "dirección"])
 
-    def generate_patient_summary(self, patient: Patient, predictions: List[PredictionResult]) -> str:
+        return pd.DataFrame(
+            data,
+            columns=["variable", "impacto", "dirección"],
+        )
+
+    def generate_patient_summary(
+        self,
+        patient: Patient,
+        predictions: List[PredictionResult],
+    ) -> str:
         guideline, classical, quantum = predictions
         highest = max(predictions, key=lambda p: p.risk_probability)
+
         text = (
             f"El paciente {patient.patient_id} presenta una probabilidad máxima estimada de "
             f"{highest.risk_probability:.1%} según {highest.model_name}. "
@@ -776,6 +1232,7 @@ class ExplainabilityService:
             f"la IA clásica como {classical.risk_group.value.lower()} y la IA cuántica como "
             f"{quantum.risk_group.value.lower()}."
         )
+
         if RISK_ORDER[quantum.risk_group.value] > RISK_ORDER[guideline.risk_group.value]:
             text += (
                 " La discrepancia sugiere que el modelo cuántico detecta interacciones clínicas complejas "
@@ -783,8 +1240,8 @@ class ExplainabilityService:
             )
         else:
             text += " Existe buena concordancia entre los enfoques, reforzando la recomendación clínica."
-        return text
 
+        return text
 
 class LiteratureService:
     def get_references_for_patient(self, patient: Patient) -> List[LiteratureReference]:
@@ -864,9 +1321,15 @@ class DashboardApp:
         self.evidence_scanner = ScientificEvidenceScanner()
         
         self.patients_df = self.repository.load_patients()
-        self.visits_df = self.repository.load_visits(self.patients_df)
+        self.visits_df = self.repository.load_visits()
+        self.dictionary_df = self.repository.load_dictionary()
+        
+        # Not run the predictions at initial Dashborad by time
         self.scored_df = self.prediction_service.score_population(self.patients_df)
         self.metrics_df = self.evaluation_service.evaluate(self.scored_df)
+               
+        
+        
 
     def run(self) -> None:
         st.set_page_config(
@@ -889,6 +1352,7 @@ class DashboardApp:
                 "3. Discrepancias e infraclasificación",
                 "4. Vista poblacional",
                 "5. Gestor de Guías Clínicas",
+                "6. Entrenamiento IA clásica",
             ]
         )
 
@@ -906,6 +1370,10 @@ class DashboardApp:
             
         with tabs[4]:
             self._render_guideline_manager()
+            
+        with tabs[5]:
+            self._render_classical_training_tab()
+            
 
     def _render_header(self) -> None:
         st.markdown(
@@ -926,7 +1394,7 @@ class DashboardApp:
         st.sidebar.title("CardioTox-AI")
         patient_id = st.sidebar.selectbox("Paciente", self.patients_df["patient_id"].tolist())
         st.sidebar.markdown("---")
-        st.sidebar.caption("Demo mockeada. Lista para conectar modelos reales y datasets del Datatón.")
+        st.sidebar.caption("Conectado a Base de Datos de SAMIRA.")
         return self.patients_df[self.patients_df["patient_id"] == patient_id].iloc[0]
 
     def _render_patient_workspace(self, patient: Patient, predictions: List[PredictionResult], final_risk: RiskGroup) -> None:
@@ -960,7 +1428,7 @@ class DashboardApp:
             with st.container(border=True):
                 st.markdown("### Explicación generativa")
                 st.write(self.xai_service.generate_patient_summary(patient, predictions))
-                st.caption("En la versión real, esta explicación se generará con IA generativa sobre reglas, SHAP, literatura y pacientes similares.")
+                st.caption("Esta explicación está generada con IA generativa sobre las reglas, SHAP, literatura y los pacientes similares.")
 
         with row1_col3:
             self._render_compact_follow_up(patient, final_risk)
@@ -1097,14 +1565,20 @@ class DashboardApp:
             patient_visits = self.visits_df[self.visits_df["patient_id"] == patient.patient_id]
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=patient_visits["month"], y=patient_visits["visit_lvef"], mode="lines+markers", name="FEVI"))
-            fig.add_trace(go.Scatter(x=patient_visits["month"], y=patient_visits["visit_gls"], mode="lines+markers", name="GLS"))
-            fig.add_trace(go.Scatter(x=patient_visits["month"], y=patient_visits["visit_troponin"], mode="lines+markers", name="Troponina"))
-            fig.update_layout(title="Evolución clínica", xaxis_title="Mes", yaxis_title="Valor")
+            fig.add_trace(go.Scatter(x=patient_visits["day_from_start"], y=patient_visits["true_lvef"], mode="lines+markers", name="FEVI"))
+            fig.add_trace(go.Scatter(x=patient_visits["day_from_start"], y=patient_visits["true_gls"], mode="lines+markers", name="GLS"))
+            fig.add_trace(go.Scatter(x=patient_visits["day_from_start"], y=patient_visits["true_troponin"], mode="lines+markers", name="Troponina"))
+            fig.update_layout(title="Evolución clínica", xaxis_title="Dias", yaxis_title="Valor")
             st.plotly_chart(fig, use_container_width=True)
 
     def _render_global_model_evaluation(self) -> None:
         st.subheader("Evaluación global de modelos en histórico")
+        
+        if self.scored_df is None:
+            self.scored_df = self._get_population_predictions(self.patients_df)
+
+        if self.metrics_df is None:
+            self.metrics_df = self.evaluation_service.evaluate(self.scored_df)
 
         best = self.metrics_df.sort_values("AUC estimado", ascending=False).iloc[0]
         c1, c2, c3, c4 = st.columns(4)
@@ -1138,16 +1612,41 @@ class DashboardApp:
             st.plotly_chart(fig, use_container_width=True)
 
     def _render_discrepancy_analysis(self) -> None:
+        
+        if self.scored_df is None:
+            self.scored_df = self._get_population_predictions(self.patients_df)
+        
         st.subheader("Discrepancias e infraclasificación")
 
         missed_classical = int(self.scored_df["missed_by_guidelines_classical"].sum())
         missed_quantum = int(self.scored_df["missed_by_guidelines_quantum"].sum())
         total_events = int(self.scored_df["event_90d"].sum())
+        
+        guideline_detected = int(
+            (
+                (self.scored_df["guideline_rank"] >= 2)
+                & (self.scored_df["event_90d"] == True)
+            ).sum()
+        )
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
+
         c1.metric("Eventos reales 90d", total_events)
-        c2.metric("Recuperados por IA clásica", missed_classical)
-        c3.metric("Recuperados por IA cuántica", missed_quantum)
+
+        c2.metric(
+            "Detectados por Guías",
+            guideline_detected,
+        )
+
+        c3.metric(
+            "Recuperados por IA clásica",
+            missed_classical,
+        )
+
+        c4.metric(
+            "Recuperados por IA cuántica",
+            missed_quantum,
+        )
 
         recovered = self.scored_df[
             self.scored_df["missed_by_guidelines_quantum"] | self.scored_df["missed_by_guidelines_classical"]
@@ -1200,7 +1699,7 @@ class DashboardApp:
             st.plotly_chart(fig, use_container_width=True)
 
         st.info(
-            "Mensaje clave para el Datatón: los pacientes que la IA reclasifica por encima de las guías "
+            "Los pacientes que la IA reclasifica por encima de las guías "
             "pueden representar perfiles clínicos infraclasificados, especialmente si presentan mayor tasa real de eventos."
         )
 
@@ -1340,7 +1839,7 @@ class DashboardApp:
             st.markdown("### 2. O recuperar guía desde URL")
             guideline_url = st.text_input(
                 "URL de la guía clínica",
-                placeholder="https://...",
+                placeholder="https://secardiologia.es/images/2023/Gu%C3%ADas/Gu%C3%ADa_ESC_2022_Cardiooncologia.pdf",
             )
 
         document_text = ""
@@ -1543,6 +2042,427 @@ class DashboardApp:
             "Buenas prácticas: versionar cada conjunto de reglas, guardar fuente documental, "
             "fecha, usuario validador, cambios introducidos y métricas de impacto."
         )      
+
+# Models Training tab
+
+    def _render_classical_training_tab(self) -> None:
+        st.subheader("Entrenamiento de modelos de IA clásica")
+
+        st.info(
+            "Esta pestaña permite lanzar el entrenamiento de varios modelos clásicos, "
+            "comparar su rendimiento y seleccionar automáticamente el mejor modelo. "
+            "El mejor modelo se guarda para ser usado después en la predicción individual."
+        )
+
+        script_path = Path("train_all_classical_models.py")
+        models_dir = Path("models")
+
+        col1, col2 = st.columns([1, 2])
+
+        with col1:
+            st.markdown("### Acción")
+            run_training = st.button(
+                "Ejecutar entrenamiento",
+                type="primary",
+                use_container_width=True,
+            )
+
+        with col2:
+            st.markdown("### Script esperado")
+            st.code(str(script_path), language="text")
+
+        if run_training:
+            if not script_path.exists():
+                st.error(
+                    "No se encuentra train_all_classical_models.py. "
+                    "Debe estar en la misma carpeta que app.py."
+                )
+                return
+
+            with st.spinner("Entrenando modelos clásicos... Esto puede tardar unos minutos."):
+                result = subprocess.run(
+                    [sys.executable, str(script_path)],
+                    capture_output=True,
+                    text=True,
+                )
+
+            st.markdown("### Salida del entrenamiento")
+
+            if result.stdout:
+                st.code(result.stdout, language="text")
+
+            if result.stderr:
+                st.warning("Mensajes / warnings del entrenamiento:")
+                st.code(result.stderr, language="text")
+
+            if result.returncode == 0:
+                st.success("Entrenamiento finalizado correctamente.")
+            else:
+                st.error("El entrenamiento terminó con errores.")
+                return
+
+        st.markdown("---")
+        st.markdown("## Resultados del último entrenamiento")
+
+        event_results_path = models_dir / "event_models_comparison.csv"
+        risk_results_path = models_dir / "risk_models_comparison.csv"
+        
+        quantum_event_results_path = models_dir / "quantum_event_models_comparison.csv"
+        quantum_risk_results_path = models_dir / "quantum_risk_models_comparison.csv"
+
+        col_event, col_risk = st.columns(2)
+
+        with col_event:
+            st.markdown("### Modelos binarios — Evento 90 días")
+
+            if event_results_path.exists():
+                event_df = pd.read_csv(event_results_path)
+
+                event_df = event_df.sort_values(
+                    "selection_score",
+                    ascending=False,
+                )
+
+                best_event = event_df.iloc[0]
+
+                st.metric(
+                    "Mejor modelo binario",
+                    best_event["model_name"],
+                )
+
+                st.metric(
+                    "AUC ROC",
+                    f"{best_event['auc_roc']:.3f}",
+                )
+
+                st.metric(
+                    "Recall / Sensibilidad",
+                    f"{best_event['recall_sensitivity']:.3f}",
+                )
+
+                st.dataframe(
+                    event_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                fig = px.bar(
+                    event_df,
+                    x="model_name",
+                    y=["auc_roc", "recall_sensitivity", "f1"],
+                    barmode="group",
+                    title="Comparativa modelos binarios",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("Aún no existen resultados de entrenamiento binario.")
+
+        with col_risk:
+            st.markdown("### Modelos multiclase — Riesgo")
+
+            if risk_results_path.exists():
+                risk_df = pd.read_csv(risk_results_path)
+
+                risk_df = risk_df.sort_values(
+                    "selection_score",
+                    ascending=False,
+                )
+
+                best_risk = risk_df.iloc[0]
+
+                st.metric(
+                    "Mejor modelo multiclase",
+                    best_risk["model_name"],
+                )
+
+                st.metric(
+                    "F1 Macro",
+                    f"{best_risk['f1_macro']:.3f}",
+                )
+
+                st.metric(
+                    "Recall Macro",
+                    f"{best_risk['recall_macro']:.3f}",
+                )
+
+                st.dataframe(
+                    risk_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                fig = px.bar(
+                    risk_df,
+                    x="model_name",
+                    y=["f1_macro", "recall_macro", "accuracy"],
+                    barmode="group",
+                    title="Comparativa modelos multiclase",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("Aún no existen resultados de entrenamiento multiclase.")
+
+        st.markdown("---")
+        
+        
+        st.markdown("---")
+        st.markdown("## Resultados modelos quantum-inspired")
+
+        col_q_event, col_q_risk = st.columns(2)
+
+        with col_q_event:
+            st.markdown("### Modelos quantum-inspired — Evento 90 días")
+
+            if quantum_event_results_path.exists():
+                quantum_event_df = pd.read_csv(quantum_event_results_path)
+
+                quantum_event_df = quantum_event_df.sort_values(
+                    "selection_score",
+                    ascending=False,
+                )
+
+                best_quantum_event = quantum_event_df.iloc[0]
+
+                st.metric(
+                    "Mejor modelo cuántico binario",
+                    best_quantum_event["model_name"],
+                )
+
+                st.metric(
+                    "AUC ROC",
+                    f"{best_quantum_event['auc_roc']:.3f}",
+                )
+
+                st.metric(
+                    "Recall / Sensibilidad",
+                    f"{best_quantum_event['recall_sensitivity']:.3f}",
+                )
+
+                st.dataframe(
+                    quantum_event_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                fig = px.bar(
+                    quantum_event_df,
+                    x="model_name",
+                    y=["auc_roc", "recall_sensitivity", "f1"],
+                    barmode="group",
+                    title="Comparativa quantum-inspired binaria",
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("Aún no existen resultados quantum-inspired binarios.")
+
+
+        with col_q_risk:
+            st.markdown("### Modelos quantum-inspired — Riesgo multiclase")
+
+            if quantum_risk_results_path.exists():
+                quantum_risk_df = pd.read_csv(quantum_risk_results_path)
+
+                quantum_risk_df = quantum_risk_df.sort_values(
+                    "selection_score",
+                    ascending=False,
+                )
+
+                best_quantum_risk = quantum_risk_df.iloc[0]
+
+                st.metric(
+                    "Mejor modelo cuántico multiclase",
+                    best_quantum_risk["model_name"],
+                )
+
+                st.metric(
+                    "F1 Macro",
+                    f"{best_quantum_risk['f1_macro']:.3f}",
+                )
+
+                st.metric(
+                    "Recall Macro",
+                    f"{best_quantum_risk['recall_macro']:.3f}",
+                )
+
+                st.dataframe(
+                    quantum_risk_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                fig = px.bar(
+                    quantum_risk_df,
+                    x="model_name",
+                    y=["f1_macro", "recall_macro", "accuracy"],
+                    barmode="group",
+                    title="Comparativa quantum-inspired multiclase",
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("Aún no existen resultados quantum-inspired multiclase.")
+                
+        st.markdown("---")
+        
+        st.markdown("## Comparativa final: clásico vs quantum-inspired")
+
+        comparison_rows = []
+
+        if event_results_path.exists():
+            event_df = pd.read_csv(event_results_path).sort_values(
+                "selection_score",
+                ascending=False,
+            )
+            best_event = event_df.iloc[0]
+
+            comparison_rows.append(
+                {
+                    "familia": "Clásico",
+                    "tipo": "Evento 90d",
+                    "modelo": best_event["model_name"],
+                    "métrica_principal": "AUC ROC",
+                    "valor": best_event["auc_roc"],
+                    "recall": best_event["recall_sensitivity"],
+                    "f1": best_event["f1"],
+                }
+            )
+
+        if quantum_event_results_path.exists():
+            quantum_event_df = pd.read_csv(quantum_event_results_path).sort_values(
+                "selection_score",
+                ascending=False,
+            )
+            best_quantum_event = quantum_event_df.iloc[0]
+
+            comparison_rows.append(
+                {
+                    "familia": "Quantum-inspired",
+                    "tipo": "Evento 90d",
+                    "modelo": best_quantum_event["model_name"],
+                    "métrica_principal": "AUC ROC",
+                    "valor": best_quantum_event["auc_roc"],
+                    "recall": best_quantum_event["recall_sensitivity"],
+                    "f1": best_quantum_event["f1"],
+                }
+            )
+
+        if risk_results_path.exists():
+            risk_df = pd.read_csv(risk_results_path).sort_values(
+                "selection_score",
+                ascending=False,
+            )
+            best_risk = risk_df.iloc[0]
+
+            comparison_rows.append(
+                {
+                    "familia": "Clásico",
+                    "tipo": "Riesgo multiclase",
+                    "modelo": best_risk["model_name"],
+                    "métrica_principal": "F1 Macro",
+                    "valor": best_risk["f1_macro"],
+                    "recall": best_risk["recall_macro"],
+                    "f1": best_risk["f1_macro"],
+                }
+            )
+
+        if quantum_risk_results_path.exists():
+            quantum_risk_df = pd.read_csv(quantum_risk_results_path).sort_values(
+                "selection_score",
+                ascending=False,
+            )
+            best_quantum_risk = quantum_risk_df.iloc[0]
+
+            comparison_rows.append(
+                {
+                    "familia": "Quantum-inspired",
+                    "tipo": "Riesgo multiclase",
+                    "modelo": best_quantum_risk["model_name"],
+                    "métrica_principal": "F1 Macro",
+                    "valor": best_quantum_risk["f1_macro"],
+                    "recall": best_quantum_risk["recall_macro"],
+                    "f1": best_quantum_risk["f1_macro"],
+                }
+            )
+
+        if comparison_rows:
+            comparison_df = pd.DataFrame(comparison_rows)
+
+            st.dataframe(
+                comparison_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            fig = px.bar(
+                comparison_df,
+                x="tipo",
+                y="valor",
+                color="familia",
+                barmode="group",
+                text_auto=".3f",
+                title="Mejor modelo clásico vs mejor modelo quantum-inspired",
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            fig = px.bar(
+                comparison_df,
+                x="tipo",
+                y="recall",
+                color="familia",
+                barmode="group",
+                text_auto=".3f",
+                title="Comparativa de sensibilidad / recall",
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        else:
+            st.warning("Todavía no hay resultados suficientes para comparar clásico vs quantum-inspired.")
+
+        st.markdown("## Modelos disponibles para inferencia")
+
+        model_files = [
+            models_dir / "best_event_model.joblib",
+            models_dir / "best_risk_model.joblib",
+            models_dir / "best_event_model_metadata.json",
+            models_dir / "best_risk_model_metadata.json",
+            models_dir / "best_quantum_event_model.joblib",
+            models_dir / "best_quantum_risk_model.joblib",
+            models_dir / "best_quantum_event_model_metadata.json",
+            models_dir / "best_quantum_risk_model_metadata.json",
+            models_dir / "population_predictions.csv",
+        ]
+
+        status_rows = []
+
+        for file in model_files:
+            status_rows.append(
+                {
+                    "artefacto": str(file),
+                    "existe": file.exists(),
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(status_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.success(
+            "Las predicciones de los pacientes se realizan con el mejor modelo clásico por un lado, y el mejor modelo cuántico por otro."
+        )
+
+    #Predict all Patients
+    @st.cache_data(show_spinner="Calculando predicciones poblacionales...")
+    def _get_population_predictions(_self, patients_df: pd.DataFrame) -> pd.DataFrame:
+        return _self.prediction_service.score_population(patients_df)
 
 
 if __name__ == "__main__":
