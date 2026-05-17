@@ -307,7 +307,6 @@ def build_candidate_models(task_type: str) -> dict[str, Pipeline]:
         logistic = LogisticRegression(
             max_iter=3000,
             class_weight="balanced",
-            multi_class="auto",
             random_state=RANDOM_STATE,
         )
 
