@@ -6,3 +6,4 @@ scikit-learn==1.7.1
 joblib==1.5.2
 shap==0.51.0
 scipy==1.16.1
+pyarrow
