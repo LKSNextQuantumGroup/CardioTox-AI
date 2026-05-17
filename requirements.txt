@@ -1,9 +1,8 @@
-streamlit==1.57.0
-pandas==2.3.2
-numpy==2.2.6
-plotly
-scikit-learn==1.7.1
-joblib==1.5.2
-shap==0.51.0
-scipy==1.16.1
-pyarrow
+streamlit==1.37.1
+pandas==2.2.2
+numpy==1.26.4
+plotly==5.24.1
+scikit-learn==1.5.1
+joblib==1.4.2
+shap==0.46.0
+scipy==1.13.1
