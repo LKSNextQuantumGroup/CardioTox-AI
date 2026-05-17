@@ -3,6 +3,6 @@ pandas
 numpy
 plotly
 scikit-learn
-joblib
+joblib=1.5.2
 shap
 scipy
