@@ -38,7 +38,7 @@ MODEL_DIR = base_dir / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 
 PATIENTS_PATH = DATA_DIR / "patients_dataton_actualizado.csv"
-VISITS_PATH = DATA_DIR / "visits_dataton_actualizado.zip"
+VISITS_PATH = DATA_DIR / "visits_dataton_actualizado.parquet"
 
 EVENT_TARGET = "cardiotoxicity_event_next_90d"
 RISK_TARGET = "baseline_risk_group"
@@ -97,7 +97,7 @@ RISK_ORDER = {
 
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     patients_df = pd.read_csv(PATIENTS_PATH)
-    visits_df = pd.read_csv(VISITS_PATH)
+    visits_df = pd.read_parquet(VISITS_PATH)
     return patients_df, visits_df
 
 

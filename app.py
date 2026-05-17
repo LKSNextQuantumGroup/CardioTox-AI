@@ -391,7 +391,7 @@ class DataRepository:
         data_dir = base_dir / "data"
 
         self.patients_path = data_dir / "patients_dataton_actualizado.csv"
-        self.visits_path = data_dir / "visits_dataton_actualizado.zip"
+        self.visits_path = data_dir / "visits_dataton_actualizado.parquet"
         self.dictionary_path = data_dir / "diccionario_clinico_datasets_dataton_actualizado.csv"
     
    # Load Patients incluying some visit fields (max/join)
@@ -399,7 +399,7 @@ class DataRepository:
     @st.cache_data
     def load_patients(_self) -> pd.DataFrame:
         patients_df = pd.read_csv(_self.patients_path)
-        visits_df = pd.read_csv(_self.visits_path)
+        visits_df = pd.read_parquet(_self.visits_path)
 
         patients_df = _self._normalize_patients(patients_df)
         visits_df = _self._normalize_visits(visits_df)
@@ -414,7 +414,7 @@ class DataRepository:
 
     @st.cache_data
     def load_visits(_self) -> pd.DataFrame:
-        visits_df = pd.read_csv(_self.visits_path)
+        visits_df = pd.read_parquet(_self.visits_path)
         visits_df = _self._normalize_visits(visits_df)
         return visits_df
     
