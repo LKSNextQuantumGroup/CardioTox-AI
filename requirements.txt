@@ -2,7 +2,7 @@ streamlit
 pandas
 numpy
 plotly
-scikit-learn
+scikit-learn==1.7.1
 joblib==1.5.2
 shap
 scipy
