@@ -42,7 +42,7 @@ import sys
 
 import joblib
 
-import shap
+#import shap #se carga en la función, pesado para streamlit
 
 # ============================================================
 # Domain layer
@@ -1098,6 +1098,7 @@ class ExplainabilityService:
         )
 
     def _explain_patient_with_shap(self, patient: Patient) -> pd.DataFrame:
+        import shap
         X_original = self._build_features(patient)
 
         preprocessor = self.event_model.named_steps["preprocessor"]
